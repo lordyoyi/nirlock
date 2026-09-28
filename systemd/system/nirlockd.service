@@ -1,0 +1,77 @@
+[Unit]
+Description=nirlock NIR face-unlock daemon
+Documentation=https://github.com/lordyoyi/nirlock
+# The camera is the only hardware dependency; without it the daemon starts
+# and answers `unavailable`, which is the right answer, not a failure.
+After=systemd-udev-settle.service
+
+[Service]
+Type=simple
+# --rgb: the lock screen blanks the display, so the face is lit only by the
+# emitter against a black scene and the firmware's whole-frame auto-exposure
+# blows it out (measured 2026-09-27: 11 saturated frames, first gate pass at
+# 1721 ms). Streaming the RGB node concurrently makes the firmware expose
+# the IR lower. ADR-0006.
+ExecStart=/usr/bin/nirlockd serve --rgb --state /var/lib/nirlock/state.json
+Restart=always
+RestartSec=2
+Environment=ORT_DYLIB_PATH=/usr/lib/libonnxruntime.so.1
+
+# --- identity -------------------------------------------------------
+# A system user of its own, created by sysusers.d. `video` is what opens
+# /dev/video2 (root:video 0660); nothing else is needed, and in particular
+# the daemon is never root.
+User=nirlock
+Group=nirlock
+SupplementaryGroups=video
+
+# --- what it may keep -----------------------------------------------
+# Enrolments and the failure counter. 0700 under this user means the
+# desktop user cannot read the face templates — which is the whole point of
+# moving off the user service.
+StateDirectory=nirlock
+StateDirectoryMode=0700
+# The socket lives here; the daemon chmods it 0666 because authority comes
+# from SO_PEERCRED, not from file permissions (PROTOCOL §1).
+RuntimeDirectory=nirlock
+RuntimeDirectoryMode=0755
+
+# --- sandbox ---------------------------------------------------------
+# Everything below is "no" by default and opened only where measured to be
+# needed: E10 of the design. ONNX Runtime and the V4L2 path both run under
+# MemoryDenyWriteExecute (verified in M0 with identical latency and parity).
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+ProtectSystem=strict
+ProtectHome=yes
+ProtectProc=invisible
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+# Only the camera. DevicePolicy=closed removes everything else, including
+# /dev/dri and /dev/accel: the NPU is not worth it for these models and the
+# GPU is not used (ADR-0004).
+DevicePolicy=closed
+DeviceAllow=char-video4linux rw
+# AuraFace resident is ~470 MiB; the ceiling catches a leak without being
+# so tight that a model reload trips it.
+MemoryHigh=900M
+MemoryMax=1200M
+
+[Install]
+WantedBy=multi-user.target

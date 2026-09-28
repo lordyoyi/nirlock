@@ -1,0 +1,4 @@
+# Enrolments: readable only by the daemon, so a process of the desktop user
+# cannot read (or replace) the face templates.
+d /var/lib/nirlock 0700 nirlock nirlock -
+d /var/lib/nirlock/templates 0700 nirlock nirlock -

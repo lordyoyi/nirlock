@@ -1,0 +1,8 @@
+id = "shinetech-3277-0055"
+match = { vendor = "3277", product = "0055", removable = "fixed" }
+ir   = { interface = 2, index = 0, format = "GREY", width = 640, height = 360, fps = 15, bytes = 230400 }
+meta = { interface = 2, index = 1, format = "UVCM" }
+rgb  = { interface = 0, index = 0, format = "MJPG", width = 1280, height = 720 }
+emitter = "firmware-strobe"     # único valor aceptado para autenticación en v1
+labeler = "uvcm-metadata"       # único valor aceptado para autenticación en v1
+notes = "Nunca escribir la XU Realtek (unidades 4/10/11) ni la interfaz DFU. v1 no escribe ningún control."

@@ -1,0 +1,24 @@
+[package]
+name = "nirlockctl"
+description = "nirlock: CLI (status, doctor, enroll, bench, plugin helpers)"
+version.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# `record` dumps raw IR frames to disk (DESIGN §2.10): development builds
+# only; the PKGBUILD builds with `--no-default-features`.
+default = ["debug-dump"]
+debug-dump = []
+
+[dependencies]
+clap = { workspace = true }
+nirlock-cam = { workspace = true }
+nirlock-vision = { workspace = true }
+nirlock-wire = { workspace = true }
+serde_json = { workspace = true }

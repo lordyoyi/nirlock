@@ -1,0 +1,207 @@
+#!/bin/bash
+# Installs nirlock as a system service: its own unprivileged user, the
+# enrolments out of reach of the desktop user, and the sandbox of
+# systemd/system/nirlockd.service.
+#
+#   sudo scripts/nirlock-install
+#
+# `scripts/nirlock-uninstall` undoes all of it.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+[[ $EUID -eq 0 ]] || { echo "run with sudo: $0" >&2; exit 1; }
+
+owner="${SUDO_USER:-}"
+[[ -n $owner ]] || { echo "run through sudo so I know whose enrolment to migrate" >&2; exit 1; }
+home=$(getent passwd "$owner" | cut -d: -f6)
+
+# Anything that talks to the running desktop shell must do so as the user,
+# with the user's runtime directory, AND with OMARCHY_PATH set.
+#
+# Two separate variables, two separate silent failures:
+#   - XDG_RUNTIME_DIR: under sudo it is root's (/run/user/0), and
+#     omarchy-shell then reports "omarchy-shell is not running" and exits 0.
+#   - OMARCHY_PATH: lives in the desktop session's environment and does not
+#     survive sudo. Without it omarchy-shell exits 1 with "OMARCHY_PATH is
+#     not set", so every plugin command failed while the install reported
+#     nothing but "enable it yourself".
+# PATH is pinned too rather than inherited from root's login.
+as_user() {
+  local uid
+  uid=$(id -u "$owner")
+  runuser -u "$owner" -- env \
+    HOME="$home" \
+    XDG_RUNTIME_DIR="/run/user/$uid" \
+    OMARCHY_PATH="${OMARCHY_PATH:-/usr/share/omarchy}" \
+    PATH="${OMARCHY_PATH:-/usr/share/omarchy}/bin:/usr/local/bin:/usr/bin:/bin" \
+    "$@"
+}
+
+echo "1/7  binaries"
+install -Dm755 target/release/nirlockd  /usr/bin/nirlockd
+install -Dm755 target/release/nirlockctl /usr/bin/nirlockctl
+
+echo "2/7  PAM module and its own lane directory"
+make -C pam >/dev/null
+install -Dm755 pam/build/pam_nirlock.so /usr/lib/security/pam_nirlock.so
+install -d -m755 /usr/lib/nirlock/pam.d
+install -m644 pam.d/nirlock-lock /usr/lib/nirlock/pam.d/nirlock-lock
+# A confdir must answer for unknown services too, or libpam falls through to
+# /etc/pam.d/other, which is not ours.
+printf '#%%PAM-1.0\nauth     required  pam_deny.so\naccount  required  pam_deny.so\n' \
+  > /usr/lib/nirlock/pam.d/other
+chmod 644 /usr/lib/nirlock/pam.d/other
+
+echo "3/7  models"
+# Hardware profiles. The daemon reads every *.toml under
+# /usr/share/nirlock/hw (shipped) and /etc/nirlock/hw (local override), and
+# matches them against the USB cameras the machine actually has. Shipping
+# them as files rather than compiling one in is what lets a camera other
+# than the developer's work at all.
+install -d -m755 /usr/share/nirlock/hw
+for f in hw/*.toml; do
+  install -m644 "$f" "/usr/share/nirlock/hw/"
+done
+
+install -d -m755 /usr/share/nirlock/models
+for m in face_detection_yunet_2026may.onnx auraface_glintr100.onnx face_recognition_sface_2021dec.onnx; do
+  if [[ -f "models/$m" ]]; then
+    install -m644 "models/$m" "/usr/share/nirlock/models/$m"
+  else
+    echo >&2
+    echo "  missing model: models/$m" >&2
+    echo "  The models are 286 MB and are not in the repository. Fetch them first" >&2
+    echo "  (no root needed, every file is checked against a pinned SHA-256):" >&2
+    echo >&2
+    echo "    scripts/nirlock-fetch-models" >&2
+    echo >&2
+    exit 1
+  fi
+done
+
+echo "4/7  system user and directories"
+install -m644 systemd/system/nirlock.sysusers /usr/lib/sysusers.d/nirlock.conf
+install -m644 systemd/system/nirlock.tmpfiles /usr/lib/tmpfiles.d/nirlock.conf
+systemd-sysusers
+systemd-tmpfiles --create /usr/lib/tmpfiles.d/nirlock.conf
+
+echo "5/7  enrolment"
+# Deliberately does NOT copy a template from anywhere. Enrolment is a
+# guided, in-person step (`nirlockctl enroll`), and quietly reinstating an
+# old one would hide whether this install actually works — it did exactly
+# that during development, where the copy on hand was a single-pose template
+# that no longer matched how the face is presented.
+if [[ -d /var/lib/nirlock/templates/$owner ]]; then
+  echo "  $owner already has an enrolment; left untouched"
+else
+  echo "  nobody enrolled yet — after this finishes run:  sudo nirlockctl enroll"
+fi
+
+echo "6/7  the service"
+install -m644 systemd/system/nirlockd.service /usr/lib/systemd/system/nirlockd.service
+systemctl daemon-reload
+
+echo "7/7  stopping the development user service, if it is running"
+if [[ -n ${SUDO_USER:-} ]]; then
+  as_user systemctl --user disable --now nirlockd.service 2>/dev/null || true
+  rm -fv "$home/.config/systemd/user/nirlockd.service"
+  rm -f /usr/lib/tmpfiles.d/nirlock-dev.conf
+fi
+
+echo "the lock-screen plugin"
+if command -v omarchy-plugin-list >/dev/null 2>&1; then
+  plugdir="$home/.config/omarchy/plugins/nirlock.lock"
+  install -d -o "$owner" -g "$owner" -m755 "$plugdir"
+  for f in plugin/lock/*; do
+    install -o "$owner" -g "$owner" -m644 "$f" "$plugdir/"
+  done
+  # The shell has to notice the directory before it can be enabled, and it
+  # will not have: the files were written a second ago. Skipping the rescan
+  # is why the first real install ended with "enable it yourself".
+  as_user omarchy-shell -q shell rescanPlugins >/dev/null 2>&1 || true
+  sleep 1
+  # An upgrade needs the shell process restarted, not the off/on cycle.
+  # Measured on 2026-09-27: Quickshell keeps every compiled QML type in an
+  # in-process cache keyed by file URL, so disabling and re-enabling
+  # re-instantiates the SAME old code. The shell logs "Local plugin changed,
+  # reloading" either way, which is what made this look like it worked. The
+  # symptom was a new file that never ran — for hours.
+  upgrade=no
+  if as_user omarchy-plugin-list 2>/dev/null | grep -q '^nirlock.lock .*enabled'; then
+    upgrade=yes
+  fi
+  # NOT silenced. The failure of this exact command was invisible twice,
+  # each time for a different missing variable, and each time the install
+  # cheerfully said "enable it yourself" with no hint why.
+  if enable_err=$(as_user omarchy-plugin-enable nirlock.lock 2>&1); then
+    if [ "$upgrade" = yes ]; then
+      # Refused while the session is locked, and rightly so: it would take
+      # the lock screen down with it. Say so instead of failing quietly.
+      if as_user omarchy restart shell >/dev/null 2>&1; then
+        echo "  upgraded and shell restarted"
+      else
+        echo "  upgraded; unlock the screen and run:  omarchy restart shell"
+      fi
+    else
+      echo "  installed and enabled"
+    fi
+  else
+    # A shell that is not running yet (fresh boot, install over SSH) is a
+    # normal case, not a failure. Anything else is worth printing.
+    echo "  installed, but NOT enabled: ${enable_err:-no output}"
+    echo "  enable it when your desktop is up:  omarchy-plugin-enable nirlock.lock"
+  fi
+else
+  echo "  no Omarchy here; wire the PAM lane into your lock screen by hand (see docs)"
+fi
+
+echo "adding the Omarchy menu entry, if this is Omarchy"
+as_user nirlockctl setup --install-menu 2>/dev/null || true
+
+# `enable --now` starts a stopped service and does nothing at all to a
+# running one, so on an upgrade the freshly installed binary sat on disk
+# while the old process kept serving. Restart unconditionally: it is the
+# same thing on a first install, and correct on every later one.
+systemctl enable nirlockd.service
+systemctl restart nirlockd.service
+# The daemon loads ~290 MB of models before it answers; without the wait the
+# enrolment below would race it.
+for _ in $(seq 1 20); do [[ -S /run/nirlock/sock ]] && break; sleep 0.5; done
+
+if ! systemctl is-active --quiet nirlockd.service; then
+  echo
+  echo "The daemon did not start. Nothing else will work until it does:"
+  systemctl --no-pager --lines=10 status nirlockd.service || true
+  exit 1
+fi
+
+echo
+echo "─────────────────────────────────────────────"
+if [[ -d /var/lib/nirlock/templates/$owner ]]; then
+  echo "  $owner is already enrolled — installation done."
+else
+  echo "  One thing left: your face."
+  echo
+  read -rp "  Enrol it now? [Y/n] " ans
+  if [[ -z ${ans:-} || ${ans,,} == y* ]]; then
+    echo
+    nirlockctl enroll --user "$owner" || {
+      echo
+      echo "  Enrolment did not finish. Run it again whenever you like:"
+      echo "    sudo nirlockctl enroll"
+    }
+  else
+    echo "  Fine — when you want to:  sudo nirlockctl enroll"
+  fi
+fi
+
+echo
+echo "─────────────────────────────────────────────"
+echo "  Face unlock is set up."
+echo
+echo "  Try it:      lock the screen (Super+Ctrl+L) and look at it"
+echo "  Settings:    nirlockctl setup"
+if command -v omarchy-plugin-list >/dev/null 2>&1; then
+  echo "               or the Omarchy menu: Setup → Security → Face Unlock"
+fi
+echo "  Your password always works, in parallel."
+echo

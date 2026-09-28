@@ -1,0 +1,8 @@
+#%PAM-1.0
+# nirlock: root-side password check of the TARGET user before any admin verb.
+# pam_unix as root reads /etc/shadow directly (no unix_chkpwd, no audit record).
+# No faillock, no system-auth (its "auth optional pam_permit.so" would fail open),
+# no nullok (an empty password never attests). success=done / default=die return
+# pam_unix's own code (7 on a wrong password); pam_deny is a backstop that must stay last.
+auth     [success=done default=die]                  pam_unix.so
+auth     required                                    pam_deny.so

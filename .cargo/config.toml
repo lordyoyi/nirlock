@@ -1,0 +1,4 @@
+# Hardening flags applied to every crate in the workspace (DESIGN §9.1):
+# full RELRO + immediate binding, and a non-executable stack.
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))']
+rustflags = ["-C", "link-arg=-Wl,-z,relro,-z,now", "-C", "link-arg=-Wl,-z,noexecstack"]

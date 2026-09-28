@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "nirlock.lock",
+  "name": "Lock Screen + Face (nirlock)",
+  "version": "0.1.0",
+  "author": "nirlock",
+  "license": "MIT",
+  "description": "Stock Omarchy lock screen loaded unchanged, plus one IR face-unlock PAM lane (nirlock-lock, from /usr/lib/nirlock/pam.d) served by nirlockd.",
+  "omarchy": { "clonedFrom": "omarchy.lock" },
+  "kinds": ["service"],
+  "keepLoaded": true,
+  "entryPoints": { "service": "Service.qml" }
+}

@@ -1,0 +1,71 @@
+#!/bin/bash
+# Downloads the three ONNX models nirlock needs, into ./models/.
+#
+#   scripts/nirlock-fetch-models [target-dir]
+#
+# They are 286 MB together, which is why they are not in the repository.
+# Every file is checked against a pinned SHA-256 before it is kept: the URLs
+# point at a branch, so upstream can move under us, and a checksum mismatch
+# must be a loud failure rather than a silently different model deciding who
+# gets to log in. A mismatch is not necessarily an attack — more likely a new
+# upstream release — but either way it needs a human, not a retry.
+#
+# No root required.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+dest="${1:-models}"
+mkdir -p "$dest"
+
+# name | sha256 | url
+models=(
+"face_detection_yunet_2026may.onnx|ebafce4e3c118d6554634be5c27ab333b4c047a9a8c3faf1d7cf93101c22f0f0|https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2026may.onnx"
+"face_recognition_sface_2021dec.onnx|0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79|https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx"
+"auraface_glintr100.onnx|a7933ea5330113b01c9b60351d8f4c33003f145d8470ac5f0e52ee2effe25c60|https://huggingface.co/fal/AuraFace-v1/resolve/main/glintr100.onnx"
+)
+
+command -v curl >/dev/null || { echo "curl is required" >&2; exit 1; }
+command -v sha256sum >/dev/null || { echo "sha256sum is required" >&2; exit 1; }
+
+fail=0
+for entry in "${models[@]}"; do
+  IFS='|' read -r name want url <<<"$entry"
+  out="$dest/$name"
+
+  if [[ -f $out ]] && [[ $(sha256sum "$out" | cut -d' ' -f1) == "$want" ]]; then
+    echo "ok       $name (already present)"
+    continue
+  fi
+
+  echo "fetching $name"
+  tmp="$out.part"
+  if ! curl -fL --retry 3 --progress-bar -o "$tmp" "$url"; then
+    echo "  FAILED to download from $url" >&2
+    rm -f "$tmp"
+    fail=1
+    continue
+  fi
+  got=$(sha256sum "$tmp" | cut -d' ' -f1)
+  if [[ $got != "$want" ]]; then
+    # Keep nothing that did not verify. A half-trusted model file is worse
+    # than no model file: the daemon would load it and authenticate with it.
+    rm -f "$tmp"
+    echo "  CHECKSUM MISMATCH for $name" >&2
+    echo "    expected $want" >&2
+    echo "    got      $got" >&2
+    echo "  Upstream may have published a new release. Do not use the file;" >&2
+    echo "  check the project's THIRD-PARTY.md and open an issue." >&2
+    fail=1
+    continue
+  fi
+  mv "$tmp" "$out"
+  echo "ok       $name"
+done
+
+if (( fail )); then
+  echo >&2
+  echo "Some models could not be verified. nirlock will not install without them." >&2
+  exit 1
+fi
+
+echo
+echo "All three models verified in $dest/"

@@ -1,0 +1,76 @@
+#!/bin/bash
+# Removes everything scripts/nirlock-install put in place, including the
+# enrolments. The lock screen goes back to password-only as soon as the
+# plugin is disabled (do that first: omarchy-plugin-disable nirlock.lock).
+set -euo pipefail
+[[ $EUID -eq 0 ]] || { echo "run with sudo: $0" >&2; exit 1; }
+owner="${SUDO_USER:-}"
+home=""
+[[ -n $owner ]] && home=$(getent passwd "$owner" | cut -d: -f6)
+
+# The lock screen comes FIRST and its restoration is verified before a single
+# file is deleted. nirlock.lock is a clone: enabling it disabled
+# omarchy.lock, and disabling it is what hands the original back. Deleting
+# the clone's files while it is still the enabled lock plugin leaves the
+# machine with no lock service at all — which is exactly what happened on
+# the first real uninstall, on a machine with autologin.
+# See nirlock-install: under sudo, XDG_RUNTIME_DIR points at root's runtime
+# directory and every call to the desktop shell quietly does nothing.
+# Must match nirlock-install's as_user exactly. It did not: this one was
+# missing OMARCHY_PATH, which omarchy-shell refuses to run without. Every
+# plugin call here therefore failed, so the check below could never confirm
+# the stock lock was back and the uninstall aborted every time — including
+# right after the user followed the manual recovery it printed.
+as_user() {
+  local uid
+  uid=$(id -u "$owner")
+  runuser -u "$owner" -- env \
+    HOME="$home" \
+    XDG_RUNTIME_DIR="/run/user/$uid" \
+    OMARCHY_PATH="${OMARCHY_PATH:-/usr/share/omarchy}" \
+    PATH="${OMARCHY_PATH:-/usr/share/omarchy}/bin:/usr/local/bin:/usr/bin:/bin" \
+    "$@"
+}
+
+if [[ -n $owner ]] && command -v omarchy-plugin-list >/dev/null 2>&1; then
+  echo "restoring the stock lock screen"
+  as_user omarchy-plugin-disable nirlock.lock >/dev/null 2>&1 || true
+  sleep 1
+  if ! as_user omarchy-plugin-list 2>/dev/null | grep -q '^omarchy.lock .*enabled'; then
+    # The automatic restore did not happen (it needs the user's session bus,
+    # which root does not always reach). Put it back explicitly.
+    as_user omarchy-plugin-enable omarchy.lock >/dev/null 2>&1 || true
+    sleep 1
+  fi
+  if as_user omarchy-plugin-list 2>/dev/null | grep -q '^omarchy.lock .*enabled'; then
+    echo "  stock lock screen is back"
+    [[ -n $home ]] && rm -rf "$home/.config/omarchy/plugins/nirlock.lock"
+  else
+    echo
+    echo "REFUSING TO CONTINUE: could not confirm the stock lock screen is enabled." >&2
+    echo "Removing nirlock now could leave this machine without a lock screen." >&2
+    echo "Run this as $owner, check it says enabled, then run me again:" >&2
+    echo "    omarchy-plugin-disable nirlock.lock" >&2
+    echo "    omarchy-plugin-enable omarchy.lock" >&2
+    echo "    omarchy-plugin-list | grep omarchy.lock" >&2
+    exit 1
+  fi
+  as_user nirlockctl setup --remove-menu >/dev/null 2>&1 || true
+fi
+
+systemctl disable --now nirlockd.service 2>/dev/null || true
+rm -fv /usr/lib/systemd/system/nirlockd.service
+rm -fv /usr/lib/sysusers.d/nirlock.conf /usr/lib/tmpfiles.d/nirlock.conf
+rm -fv /usr/bin/nirlockd /usr/bin/nirlockctl /usr/lib/security/pam_nirlock.so
+rm -rfv /usr/lib/nirlock /usr/share/nirlock /run/nirlock
+# /etc/nirlock/hw is left alone on purpose: a profile the user wrote for
+# their own camera is their work, not ours, and silently deleting it would
+# destroy something that may not exist anywhere else yet.
+if [[ -d /etc/nirlock/hw ]]; then
+  echo "kept /etc/nirlock/hw (your own hardware profiles); remove it by hand if you want it gone"
+fi
+echo
+read -rp "delete the enrolled faces in /var/lib/nirlock too? [y/N] " a
+[[ ${a,,} == y ]] && rm -rfv /var/lib/nirlock
+systemctl daemon-reload
+echo "done"

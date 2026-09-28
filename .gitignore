@@ -1,0 +1,19 @@
+/target/
+# The models are 286 MB; scripts/nirlock-fetch-models downloads and verifies
+# them. Nothing under models/ belongs in the repository, including the
+# symlinks a developer may keep there.
+/models/*
+/data/
+/pam/build/
+*.pgm
+*.core
+# Biometric artefacts the tooling handles: FUEMB1 templates and their sidecars,
+# fuprobe session indexes, per-frame dumps and bench reports (they list frame
+# names and cosines). They live in the lab repository, never here.
+*.emb
+*.src.tsv
+frames.jsonl
+/bench/
+*.bench.json
+*.dump.jsonl
+/tools/bench-opencv/build/

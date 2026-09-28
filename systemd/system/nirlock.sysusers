@@ -1,0 +1,3 @@
+# The daemon's own identity. `video` is what lets it open the IR camera.
+u nirlock - "nirlock face unlock daemon" /var/lib/nirlock
+m nirlock video
