@@ -1,0 +1,64 @@
+name: Something is broken
+description: Face unlock does not work, or works in a way it should not
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before anything else: **your password always works**. If you are
+        locked out of your screen entirely, that is a different and more
+        serious report — say so in the first line.
+
+        If it is a security vulnerability, do not file it here. Mail the
+        address in `LICENSE` first.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens, and what you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: journal
+    attributes:
+      label: What the daemon said
+      description: |
+        `journalctl -u nirlockd -n 30 --no-pager`
+
+        These lines carry no biometric data — no similarity scores, by
+        design. They do carry frame counts, timings and the pose of rejected
+        frames, which is what makes a failure diagnosable.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: probe
+    attributes:
+      label: Output of `nirlockctl probe`
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: kernel
+    attributes:
+      label: Kernel and distribution
+      placeholder: "6.17.4-arch1-1, Omarchy"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where does it fail?
+      options:
+        - "Enrolment (`nirlockctl enroll`)"
+        - "The lock screen never tries — nothing lights up"
+        - "It tries and never recognises me"
+        - "It recognises someone or something it should not"
+        - "Install or uninstall"
+        - "Somewhere else"
+    validations:
+      required: true
