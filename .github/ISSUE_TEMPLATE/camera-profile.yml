@@ -1,0 +1,72 @@
+name: Add a camera
+description: Contribute a hardware profile so nirlock works on your laptop
+title: "camera: <laptop model> (<vendor:product>)"
+labels: ["camera"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you — this is the most useful thing you can send.
+
+        Everything below comes from one command, `nirlockctl probe`. If you
+        have not built nirlock yet, `cargo build --release` and then
+        `target/release/nirlockctl probe` is enough; it only reads.
+
+  - type: input
+    id: laptop
+    attributes:
+      label: Laptop model
+      description: The exact model, as precisely as you can. This is what the next person searches for.
+      placeholder: ASUS Zenbook UX3405CA
+    validations:
+      required: true
+
+  - type: textarea
+    id: probe
+    attributes:
+      label: Output of `nirlockctl probe`
+      description: Paste it whole, including the verdict line. Do not trim it — the node layout is the profile.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: kernel
+    attributes:
+      label: Kernel version
+      description: "`uname -r`. The per-frame illumination metadata needs 6.17 or newer."
+      placeholder: "6.17.4-arch1-1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: verified
+    attributes:
+      label: Did you verify the profile?
+      description: |
+        A profile that parses but does not work is worse than none: it is
+        advertised as supported and sends the next person to debug a file we
+        generated. "Not yet" is a perfectly good answer — say so and we will
+        treat it as a lead rather than a profile.
+      options:
+        - "Yes — I installed it, enrolled, and unlocked my screen with my face"
+        - "Partly — the daemon starts and sees the camera, but I have not unlocked with it"
+        - "Not yet — probe says it should work, but I have not tried"
+    validations:
+      required: true
+
+  - type: textarea
+    id: profile
+    attributes:
+      label: The profile itself
+      description: "From `nirlockctl probe --toml`. Correct the `id` to your laptop model, and the `fps` if you checked it with `v4l2-ctl --list-formats-ext`."
+      render: toml
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: |
+        Unlock times, whether it needed `--rgb`, anything that behaved
+        differently from the README. Negative results are welcome: a camera
+        that cannot work is worth recording so nobody repeats the attempt.

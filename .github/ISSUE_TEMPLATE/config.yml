@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Does my laptop work?
+    url: https://github.com/lordyoyi/nirlock/blob/master/docs/HARDWARE.md#otras-cámaras-perfiles-y-cómo-contribuir-el-tuyo
+    about: What a camera needs to qualify, and why. Read this before filing anything.
+  - name: Security issue
+    url: https://github.com/lordyoyi/nirlock/blob/master/docs/THREAT-MODEL.md
+    about: What this defends against and what it does not. For a vulnerability, mail the address in LICENSE instead of opening an issue.

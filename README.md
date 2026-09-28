@@ -135,8 +135,11 @@ in `hw/`, matched against your camera's USB vendor:product:
 nirlockctl probe --toml > hw/04f2-b6d0.toml
 ```
 
-Verify it for real — install it, enrol, unlock — then open a pull request with
-your laptop model. A profile that parses but does not work is worse than none.
+Verify it for real — install it, enrol, unlock — then send it, either as a
+[pull request](https://github.com/lordyoyi/nirlock/compare) or through the
+[Add a camera](https://github.com/lordyoyi/nirlock/issues/new?template=camera-profile.yml)
+issue form if you would rather not open a PR. A profile that parses but does
+not work is worse than none.
 [`docs/HARDWARE.md`](docs/HARDWARE.md) has the details, including what makes a
 camera qualify and what the profile may and may not change.
 
