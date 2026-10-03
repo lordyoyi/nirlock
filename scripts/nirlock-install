@@ -36,6 +36,46 @@ as_user() {
     "$@"
 }
 
+# Preflight: everything that can rule this machine out is checked before a
+# single file is installed. The first install on a machine other than the
+# author's went all the way through — user, service, PAM, plugin, menu entry
+# — and only then said the daemon would not start, because ONNX Runtime was
+# missing and the camera had no IR sensor. Both were knowable up front.
+echo "0/7  can this machine do it?"
+preflight_ok=yes
+for b in target/release/nirlockd target/release/nirlockctl; do
+  if [[ ! -x $b ]]; then
+    echo "  missing $b — build first:  cargo build --release --locked" >&2
+    preflight_ok=no
+  fi
+done
+# The path nirlockd.service hands the daemon in ORT_DYLIB_PATH.
+if [[ ! -e /usr/lib/libonnxruntime.so.1 ]]; then
+  echo "  ONNX Runtime is not installed (no /usr/lib/libonnxruntime.so.1)." >&2
+  echo "  On Arch:  sudo pacman -S onnxruntime-cpu" >&2
+  preflight_ok=no
+fi
+[[ $preflight_ok == yes ]] || exit 1
+# The same verdict the daemon will reach at startup. The checkout's
+# nirlockctl sees the shipped profiles (built in) plus any already in
+# /etc/nirlock/hw, which is exactly the set the installed daemon will have.
+if ! probe_out=$(target/release/nirlockctl probe 2>&1); then
+  echo "$probe_out" | sed 's/^/  /' >&2
+  echo >&2
+  echo "  Nothing was installed. Face unlock needs a Windows Hello IR camera," >&2
+  echo "  and this machine does not have one nirlock can use." >&2
+  exit 1
+fi
+if ! grep -q -- '-> supported:' <<<"$probe_out"; then
+  echo "$probe_out" | sed 's/^/  /'
+  echo
+  echo "  Nothing was installed. Your camera looks usable, but no profile claims" >&2
+  echo "  it yet: save the profile printed above to /etc/nirlock/hw/ as shown," >&2
+  echo "  then run this installer again." >&2
+  exit 1
+fi
+grep -- '-> supported:' <<<"$probe_out" | sed 's/^ */  /'
+
 echo "1/7  binaries"
 install -Dm755 target/release/nirlockd  /usr/bin/nirlockd
 install -Dm755 target/release/nirlockctl /usr/bin/nirlockctl
@@ -43,13 +83,15 @@ install -Dm755 target/release/nirlockctl /usr/bin/nirlockctl
 echo "2/7  PAM module and its own lane directory"
 make -C pam >/dev/null
 install -Dm755 pam/build/pam_nirlock.so /usr/lib/security/pam_nirlock.so
+# All three services of ADR-0012, copied verbatim from pam.d/: nirlock-lock
+# (the face lane), nirlock-admin (the root-side password check, ADR-0013) and
+# other (pam_deny for every type, so an unknown service never falls through
+# to /etc/pam.d/other). This used to install nirlock-lock alone and write a
+# shorter `other` by hand — a second source of truth that had drifted.
 install -d -m755 /usr/lib/nirlock/pam.d
-install -m644 pam.d/nirlock-lock /usr/lib/nirlock/pam.d/nirlock-lock
-# A confdir must answer for unknown services too, or libpam falls through to
-# /etc/pam.d/other, which is not ours.
-printf '#%%PAM-1.0\nauth     required  pam_deny.so\naccount  required  pam_deny.so\n' \
-  > /usr/lib/nirlock/pam.d/other
-chmod 644 /usr/lib/nirlock/pam.d/other
+for f in nirlock-lock nirlock-admin other; do
+  install -m644 "pam.d/$f" "/usr/lib/nirlock/pam.d/$f"
+done
 
 echo "3/7  models"
 # Hardware profiles. The daemon reads every *.toml under
@@ -93,7 +135,7 @@ echo "5/7  enrolment"
 if [[ -d /var/lib/nirlock/templates/$owner ]]; then
   echo "  $owner already has an enrolment; left untouched"
 else
-  echo "  nobody enrolled yet — after this finishes run:  sudo nirlockctl enroll"
+  echo "  nobody enrolled yet — you will be offered enrolment at the end"
 fi
 
 echo "6/7  the service"
