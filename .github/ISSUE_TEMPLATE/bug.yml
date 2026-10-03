@@ -9,8 +9,8 @@ body:
         locked out of your screen entirely, that is a different and more
         serious report — say so in the first line.
 
-        If it is a security vulnerability, do not file it here. Mail the
-        address in `LICENSE` first.
+        If it is a security vulnerability, do not file it here. Use private vulnerability
+        reporting: https://github.com/lordyoyi/nirlock/security/advisories/new
 
   - type: textarea
     id: what

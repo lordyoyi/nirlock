@@ -5,4 +5,4 @@ contact_links:
     about: What a camera needs to qualify, and why. Read this before filing anything.
   - name: Security issue
     url: https://github.com/lordyoyi/nirlock/blob/master/docs/THREAT-MODEL.md
-    about: What this defends against and what it does not. For a vulnerability, mail the address in LICENSE instead of opening an issue.
+    about: What this defends against and what it does not. For a vulnerability use private reporting from the Security tab, never an issue.

@@ -1,16 +1,19 @@
 name: Add a camera
-description: Contribute a hardware profile so nirlock works on your laptop
+description: Report what `nirlockctl probe` measured on your laptop — working or not
 title: "camera: <laptop model> (<vendor:product>)"
 labels: ["camera"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thank you — this is the most useful thing you can send.
+        Thank you — this is the most useful thing you can send, and that is
+        true whether or not your camera works.
 
         Everything below comes from one command, `nirlockctl probe`. If you
         have not built nirlock yet, `cargo build --release` and then
-        `target/release/nirlockctl probe` is enough; it only reads.
+        `NIRLOCK_HW_DIRS=hw target/release/nirlockctl probe` is enough. No
+        install, no root, about two seconds — during which the camera light
+        comes on, because measuring the emitter means streaming it.
 
   - type: input
     id: laptop
@@ -25,7 +28,13 @@ body:
     id: probe
     attributes:
       label: Output of `nirlockctl probe`
-      description: Paste it whole, including the verdict line. Do not trim it — the node layout is the profile.
+      description: |
+        Paste it whole, including the `strobe:` line and the verdict. Do not
+        trim it: the node layout is the profile, and the strobe line is the
+        measurement that decides whether the camera can work at all.
+
+        **Send this even if the verdict is "cannot be used".** A recorded
+        negative saves the next person with your laptop an evening.
       render: text
     validations:
       required: true
