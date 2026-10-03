@@ -16,6 +16,17 @@ pub struct ProbeArgs {
 
 pub fn run(a: &ProbeArgs) -> i32 {
     let mut sys = RealSys;
+    // Said before it happens, on stderr so `--toml` stays byte-clean. probe
+    // reads like a question, but answering the one that matters means
+    // streaming, and streaming lights the emitter: the white LED comes on and
+    // the infrared pulses faintly red. Finding that out afterwards is a
+    // surprise on your own laptop.
+    eprintln!(
+        "Looking at every camera, and streaming the infrared ones for {} seconds\n\
+         to see whether the emitter strobes on its own. The camera light will\n\
+         come on while that happens.\n",
+        2
+    );
     let set = ProfileSet::load();
     let devices = probe_dev::probe_in(std::path::Path::new("/sys"), &set, &mut sys);
 
@@ -92,15 +103,34 @@ pub fn run(a: &ProbeArgs) -> i32 {
                 note
             );
         }
+        if let Some(st) = &d.strobe {
+            println!("  {:<14} {}", "strobe:", st.summary());
+        }
         match &d.verdict {
             Verdict::Supported { id, source } => {
                 usable += 1;
                 println!("  -> supported: profile '{id}' from {source}");
+                // A profile claiming a camera whose emitter does not strobe is
+                // a published profile that is wrong, and the `supported`
+                // verdict would otherwise bury it.
+                match &d.strobe {
+                    Some(probe_dev::Strobe::FirmwareStrobe(_)) | None => {}
+                    Some(probe_dev::Strobe::Unmeasured(why)) => {
+                        println!("     (the strobe could not be measured this time: {why})");
+                    }
+                    Some(other) => {
+                        println!();
+                        println!("     WARNING: this profile says the emitter strobes by itself,");
+                        println!("     but the measurement disagrees: {}", other.summary());
+                        println!("     Face unlock will not work. Please report this with the");
+                        println!("     output above, profile '{id}'.");
+                    }
+                }
             }
             Verdict::Candidate => {
                 usable += 1;
                 println!("  -> usable, but no profile claims it yet.");
-                println!("     Save the profile below and it will work:");
+                println!("     All three requirements measured. Save this profile:");
                 println!();
                 for line in d.candidate.as_deref().unwrap_or("").lines() {
                     println!("       {line}");
@@ -117,6 +147,14 @@ pub fn run(a: &ProbeArgs) -> i32 {
             }
             Verdict::Unusable(why) => {
                 println!("  -> cannot be used: {why}");
+            }
+            Verdict::Inconclusive(why) => {
+                println!("  -> no verdict: the strobe could not be measured.");
+                println!("     {why}");
+                println!();
+                println!("     This is NOT a statement about your camera. Close anything that");
+                println!("     might be using it and run this again; if you are over SSH, run it");
+                println!("     on the laptop's own session.");
             }
         }
     }

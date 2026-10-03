@@ -120,6 +120,24 @@ pub enum Error {
     NotEnrolled(String),
 }
 
+impl Error {
+    /// The `unavailable <reason>` token of PROTOCOL.md for this failure.
+    ///
+    /// The server used to answer a hardcoded `"camera_error"` for every
+    /// engine failure, so a camera held by a browser came back as a generic
+    /// error while DESIGN §2.3 and §2.9, PROTOCOL.md and the rescue guide all
+    /// promised `camera_busy` — and the guide tells the user that token means
+    /// another application has the camera, sending them after the wrong
+    /// thing. `nirlock_cam::Error` already knows its own token; carry it.
+    pub fn reason(&self) -> &'static str {
+        match self {
+            Error::Cam(e) => e.reason(),
+            Error::Vision(_) => "internal",
+            Error::NotEnrolled(_) => "not_enrolled",
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl Engine {
@@ -336,6 +354,34 @@ mod tests {
         assert_eq!((d.k, d.window), (2, 4));
         assert_eq!(d.threshold, 0.45); // AuraFace, provisional (ADR-0007)
         assert_eq!(d.hit_ttl_ms, 800.0);
+    }
+
+    /// Every token this can produce must be one PROTOCOL.md declares, or a
+    /// client sees a word it has no case for.
+    #[test]
+    fn engine_error_reasons_are_protocol_tokens() {
+        const DECLARED: &[&str] = &[
+            "stale", "not_enrolled", "template_stale", "disabled", "account_locked",
+            "lid_closed", "camera_busy", "camera_missing", "camera_mismatch",
+            "camera_format", "camera_ambiguous", "metadata", "models_unavailable",
+            "rate_limited", "budget", "busy", "no_session", "suspending", "internal",
+        ];
+        // The case that cost us: a camera held by another application must
+        // say so, because the rescue guide tells the user what that token
+        // means and sends them to `fuser`.
+        let busy = Error::Cam(nirlock_cam::Error::Busy {
+            dev: "/dev/video2".into(),
+        });
+        assert_eq!(busy.reason(), "camera_busy");
+        for e in [
+            busy,
+            Error::Cam(nirlock_cam::Error::NoMetaNode {
+                usb_sysfs: "/sys/x".into(),
+            }),
+            Error::NotEnrolled("rodrigo".into()),
+        ] {
+            assert!(DECLARED.contains(&e.reason()), "{e} -> {}", e.reason());
+        }
     }
 
     #[test]

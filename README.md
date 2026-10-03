@@ -76,7 +76,7 @@ Two things a reader should not assume:
 | | |
 |---|---|
 | Kernel | **6.17 or newer** — needs `V4L2_META_FMT_UVC_MSXU_1_5` for the per-frame illumination metadata |
-| Camera | A Windows Hello IR camera exposing the Microsoft extension unit. If your laptop does not do face unlock in Windows, it will not do it here. |
+| Camera | A Windows Hello IR camera whose emitter strobes **on its own**. Windows face unlock is necessary but not sufficient: Windows writes a vendor control to light the emitter, and nirlock never writes one (see [Why your camera might not qualify](#why-your-camera-might-not-qualify)). `nirlockctl probe` measures this. |
 | Desktop | The lock-screen plugin is [Omarchy](https://omarchy.org)-specific. The daemon and PAM module are not. |
 | Runtime | ONNX Runtime (`sudo pacman -S onnxruntime-cpu` on Arch), loaded dynamically |
 
@@ -99,8 +99,24 @@ USB 3277:0055 'USB2.0 FHD UVC WebCam' (fixed)
   -> supported: profile 'shinetech-3277-0055' from /usr/share/nirlock/hw/3277-0055.toml
 ```
 
-The two lines that decide it: a `GREY` capture node (the IR sensor) and a
-`UVCM` metadata node beside it on the same interface.
+Three things decide it, and probe checks all three: a `GREY` capture node (the
+IR sensor), a `UVCM` metadata node beside it on the same interface, and the
+`strobe:` line, which comes from actually streaming the camera for two seconds
+and watching the per-frame illumination label.
+
+### Why your camera might not qualify
+
+nirlock writes no UVC controls, ever ([ADR-0005](docs/adr/) — sibling cameras
+have been bricked by probing extension units). So the emitter has to strobe by
+itself, from firmware.
+
+Many Windows Hello cameras do not: they sit dark until the host writes a vendor
+control, which is what Windows does and what nirlock refuses to do. In the
+published record of measured cameras this is the common case, not the rare one,
+and it tracks the module vendor more than the laptop brand.
+
+This is why probe streams instead of reading descriptors. A camera can have the
+IR sensor, the metadata node, the right formats, and still never light up.
 
 ## Install
 

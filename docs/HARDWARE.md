@@ -194,6 +194,24 @@ Tres cosas, y las tres son del hardware, no del software:
    `emitter = "firmware-strobe"` es el único valor aceptado, y eso es
    deliberado: un perfil no puede cambiar de dónde sale la etiqueta.
 
+   **Este es el requisito que más cámaras incumplen**, y es el único que no se
+   ve en los descriptores. Por eso `nirlockctl probe` abre el nodo IR dos
+   segundos y mira qué hacen las etiquetas de verdad, en vez de suponerlo.
+   Hasta el 2026-10-03 lo suponía: escribía `emitter = "firmware-strobe"` como
+   literal y le decía a la persona «guarda este perfil y funcionará». En una
+   cámara con el emisor apagado eso era falso, y se descubría después de bajar
+   286 MB e instalar.
+
+   Lo que puede medir y qué significa cada caso:
+
+   | Medición | Veredicto |
+   |---|---|
+   | Frames iluminados y oscuros, alternando | Cumple. Es el único caso que genera un perfil |
+   | Etiquetas que nunca cambian | Emisor fijo: el bit no aporta información y no sirve |
+   | Frames sin etiqueta | El metadato no llega aunque `S_FMT` lo aceptara |
+   | Cero frames | El emisor está apagado y el firmware no entrega nada |
+   | No se pudo medir | **No es un juicio sobre la cámara**: algo la tenía ocupada |
+
 Lo que **sí** puede variar entre cámaras, y por eso ya no está clavado: la
 geometría IR y RGB, los fps, y qué interfaz/índice ocupa cada nodo.
 
@@ -212,6 +230,9 @@ Solo el TOML, para redirigirlo:
 ```
 nirlockctl probe --toml > 04f2-b6d0.toml
 ```
+
+El perfil generado lleva la medición en su campo `notes`, así que la evidencia
+de su línea `emitter` viaja con él.
 
 Dos advertencias honestas sobre lo que genera:
 

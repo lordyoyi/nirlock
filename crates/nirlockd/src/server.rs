@@ -353,8 +353,9 @@ fn handle(stream: UnixStream, shared: &Shared) -> std::io::Result<()> {
                             })
                         }
                         Err(e) => {
-                            eprintln!("nirlockd: verify: {e}");
-                            finish(Answer::Unavailable("camera_error"))
+                            let reason = e.reason();
+                            eprintln!("nirlockd: verify: {e} (unavailable {reason})");
+                            finish(Answer::Unavailable(reason))
                         }
                     },
                 }

@@ -160,6 +160,38 @@ reales, incluido uno que el propio PR introducía: `RestartPreventExitStatus=78`
 convertía una carrera de arranque en pérdida permanente del desbloqueo facial.
 Arreglado antes de mergear (ver "Semántica de salida").
 
+**Investigación del panorama de cámaras (2026-10-03).** El requisito que mata
+no es tener sensor IR ni metadatos: es que el emisor **estrobee solo**. En el
+registro publicado de cámaras medidas eso es la excepción, quizá una de cada
+cuatro, y correlaciona con el fabricante del módulo: ASUS/Shinetech y Logitech
+estrobean solas; Chicony, Bison y Sunplus —la cadena de Lenovo— aparecen
+apagadas. Desarrollamos sobre la familia donde mejor funciona, lo cual fue
+suerte. Evidencia delgada (n=6, sesgada hacia fallos porque viene de
+rastreadores de bugs): tratarlo como orden de magnitud, no como estadística.
+
+Salió de ahí un bug nuestro que llevaba publicado desde el 27 de septiembre:
+`probe` escribía `emitter = "firmware-strobe"` como literal sin abrir nunca el
+stream, y le decía a la gente «guarda este perfil y funcionará». Arreglado el
+2026-10-03: ahora transmite dos segundos y mide. Cinco desenlaces, y el quinto
+—«no se pudo medir»— se mantiene separado de «no sirve» a propósito, porque
+confundirlos convierte una cámara buena en rechazada, que es el mismo bug al
+revés.
+
+De paso, tercera vez que la documentación prometía algo que el código no hacía:
+`server.rs` respondía `camera_error` a cualquier fallo del motor mientras
+DESIGN §2.3 y §2.9, PROTOCOL.md y la guía de rescate prometían `camera_busy`.
+Ahora se arrastra el token real.
+
+**Proyectos vecinos.** Howdy (7.809 estrellas, MIT) lleva desde julio de 2025
+sin un commit, con PRs esperando y ningún fork con tracción: está vacante, no
+muerta. Mandarle trabajo hoy es ponerlo en una cola parada. irlume
+(archledger/irlume) sí está activo y hace bien algo que vale copiar: genera su
+matriz de hardware desde archivos de evidencia commiteados, con la política de
+que una cámara sin medición no tiene fila. Su auto-descubrimiento de controles
+llegó a dejar una cámara sin enumerar —fue a servicio técnico— y su arreglo fue
+dejar de escribir valores adivinados: convergieron hacia nuestro ADR-0005
+después de romper hardware.
+
 ### Abierto
 
 - **Prueba de foto impresa (G2)**: nunca hecha, no hay impresora. Es lo que
@@ -173,4 +205,17 @@ Arreglado antes de mergear (ver "Semántica de salida").
 - **Perfiles de otras cámaras**: solo contribuidos y verificados por su dueño,
   vía las plantillas de `.github/ISSUE_TEMPLATE/`.
 - `Verdict::Supported` del probe se decide por `vendor:product`; el daemon aún
-  puede rechazar la cámara después (p. ej. sin nodo de metadatos).
+  puede rechazar la cámara después (p. ej. sin nodo de metadatos). El probe sí
+  avisa si un perfil publicado dice que estrobea y la medición lo desmiente.
+- **`LabelRules` (DESIGN §2.4 reglas 2 y 3) no se aplica en el daemon.** Está
+  implementado en `capture.rs` y lo consumen solo `record` y ahora `probe`. El
+  daemon solo aplica la regla 1. Tocarlo es tocar la ruta de verificación en la
+  única cámara que existe, así que va en un cambio propio, nunca de paso.
+- **Registro de cámaras tipo irlume**: `hw/reported/` con registros de
+  observación y un script que genere `docs/CAMERAS.md`. Lo más valioso son las
+  filas **negativas**: convierten un callejón sin salida en un diagnóstico.
+- La prueba del teléfono conviene repetirla con una pantalla **LCD**. G1 se
+  midió con un OLED, y la retroiluminación LED blanca de un LCD emite en el
+  infrarrojo cercano donde el OLED casi no. Otro proyecto reporta 0,9013 con
+  pantalla en esta misma cámara, pero su pipeline no usaba la compuerta de
+  iluminación, así que mide otra cosa.
