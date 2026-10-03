@@ -78,7 +78,7 @@ Two things a reader should not assume:
 | Kernel | **6.17 or newer** — needs `V4L2_META_FMT_UVC_MSXU_1_5` for the per-frame illumination metadata |
 | Camera | A Windows Hello IR camera exposing the Microsoft extension unit. If your laptop does not do face unlock in Windows, it will not do it here. |
 | Desktop | The lock-screen plugin is [Omarchy](https://omarchy.org)-specific. The daemon and PAM module are not. |
-| Runtime | ONNX Runtime (`onnxruntime` on Arch), loaded dynamically |
+| Runtime | ONNX Runtime (`sudo pacman -S onnxruntime-cpu` on Arch), loaded dynamically |
 
 ## Does my laptop work?
 
@@ -105,22 +105,28 @@ The two lines that decide it: a `GREY` capture node (the IR sensor) and a
 ## Install
 
 ```
+sudo pacman -S onnxruntime-cpu        # Arch; there is no package called plain "onnxruntime"
 git clone https://github.com/lordyoyi/nirlock && cd nirlock
 cargo build --release --locked
+target/release/nirlockctl probe       # must say "supported" — stop here if it does not
 make -C pam
 scripts/nirlock-fetch-models          # 286 MB, SHA-256 pinned, no root
 sudo scripts/nirlock-install
 ```
 
-The installer sets up the daemon's user, the sandbox, the PAM lane, the
-Omarchy plugin and the menu entry, then walks you through enrolment.
+The installer runs the same checks first (ONNX Runtime present, a camera
+with a profile) and installs nothing if either fails. Then it sets up the
+daemon's user, the sandbox, the PAM lane, the Omarchy plugin and the menu
+entry, and walks you through enrolment.
 `scripts/nirlock-uninstall` undoes all of it and verifies your lock screen is
 back before removing anything.
 
-Enrol (or re-enrol) at any time:
+Enrol (or re-enrol) at any time — it needs root, because the templates
+belong to the daemon's user:
 
 ```
-nirlockctl enroll
+sudo nirlockctl enroll            # first time
+sudo nirlockctl enroll --force    # re-enrol
 ```
 
 It shows a live IR preview in the terminal and guides you through five looks,

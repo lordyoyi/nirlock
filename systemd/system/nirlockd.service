@@ -1,8 +1,9 @@
 [Unit]
 Description=nirlock NIR face-unlock daemon
 Documentation=https://github.com/lordyoyi/nirlock
-# The camera is the only hardware dependency; without it the daemon starts
-# and answers `unavailable`, which is the right answer, not a failure.
+# The camera is the only hardware dependency. Without a camera a profile
+# claims (or without ONNX Runtime) the daemon exits 78 and is NOT restarted:
+# see RestartPreventExitStatus. The lock screen then stays password-only.
 After=systemd-udev-settle.service
 
 [Service]
@@ -15,6 +16,10 @@ Type=simple
 ExecStart=/usr/bin/nirlockd serve --rgb --state /var/lib/nirlock/state.json
 Restart=always
 RestartSec=2
+# 78 = unsupported machine (no profile for any camera, or no ONNX Runtime).
+# Retrying cannot fix either; it only filled the journal with a restart every
+# two seconds on the first machine that was not the author's.
+RestartPreventExitStatus=78
 Environment=ORT_DYLIB_PATH=/usr/lib/libonnxruntime.so.1
 
 # --- identity -------------------------------------------------------

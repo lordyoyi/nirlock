@@ -128,6 +128,20 @@ fn embedder_kind(name: &str) -> Kind {
     }
 }
 
+/// Exit status for "this machine cannot run nirlock as installed": no
+/// hardware profile claims any camera, or ONNX Runtime is missing. Retrying
+/// fixes neither, so `nirlockd.service` lists it in `RestartPreventExitStatus`
+/// instead of restarting every two seconds forever (EX_CONFIG, sysexits.h).
+const EXIT_UNSUPPORTED: i32 = 78;
+
+fn is_unsupported(e: &engine::Error) -> bool {
+    matches!(
+        e,
+        engine::Error::Cam(nirlock_cam::Error::NoProfile { .. })
+            | engine::Error::Vision(nirlock_vision::Error::OrtLoad(_))
+    )
+}
+
 fn serve(s: &Serve) {
     // Models first: the point of a resident daemon is that a `verify`
     // never pays the ~940 ms AuraFace load (ADR-0004).
@@ -140,7 +154,12 @@ fn serve(s: &Serve) {
         Ok(e) => e,
         Err(e) => {
             eprintln!("nirlockd: {e}");
-            std::process::exit(1)
+            let code = if is_unsupported(&e) {
+                EXIT_UNSUPPORTED
+            } else {
+                1
+            };
+            std::process::exit(code)
         }
     };
     let state = if s.state.starts_with("%h") {
