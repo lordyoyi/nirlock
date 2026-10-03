@@ -242,6 +242,18 @@ impl HwProfile {
 /// without editing a package-owned file.
 pub const PROFILE_DIRS: [&str; 2] = ["/etc/nirlock/hw", "/usr/share/nirlock/hw"];
 
+/// Parses `NIRLOCK_HW_DIRS`. Split out so it can be tested without mutating
+/// the process environment, which every other test would see.
+fn extra_dirs(v: Option<&str>) -> Vec<PathBuf> {
+    v.map(|v| {
+        v.split(':')
+            .filter(|p| !p.is_empty())
+            .map(PathBuf::from)
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
 /// Every profile the daemon knows about.
 ///
 /// The daemon used to hold exactly one profile, compiled in, for the camera
@@ -263,10 +275,23 @@ struct Entry {
 }
 
 impl ProfileSet {
-    /// Loads every profile under `PROFILE_DIRS`, with the embedded profile
-    /// last so that a checkout with nothing installed still works.
+    /// Loads every profile under `NIRLOCK_HW_DIRS` (if set) then
+    /// `PROFILE_DIRS`, with the embedded profile last so that a checkout with
+    /// nothing installed still works.
+    ///
+    /// `NIRLOCK_HW_DIRS` is a colon-separated list that takes priority over
+    /// the installed directories. It exists because exactly ONE profile is
+    /// compiled in (the camera this was developed on), so a checkout's
+    /// `nirlockctl probe` could not see the profiles shipped in the repo's
+    /// `hw/` — the ones contributors send. The installer's preflight asks
+    /// probe whether the machine is supported BEFORE installing anything, so
+    /// without this the first contributed camera would be refused by the very
+    /// check meant to help it, and told to write a profile that was already
+    /// in the tree.
     pub fn load() -> Self {
-        let dirs: Vec<&Path> = PROFILE_DIRS.iter().map(Path::new).collect();
+        let extra = extra_dirs(std::env::var("NIRLOCK_HW_DIRS").ok().as_deref());
+        let mut dirs: Vec<&Path> = extra.iter().map(PathBuf::as_path).collect();
+        dirs.extend(PROFILE_DIRS.iter().map(Path::new));
         Self::load_from(&dirs)
     }
 
@@ -611,6 +636,38 @@ mod tests {
         assert_eq!(problems.len(), 1, "{problems:?}");
         assert!(problems[0].contains("broken.toml"), "{problems:?}");
 
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn extra_profile_dirs_are_parsed_and_take_priority() {
+        assert_eq!(extra_dirs(None), Vec::<PathBuf>::new());
+        assert_eq!(extra_dirs(Some("")), Vec::<PathBuf>::new());
+        assert_eq!(extra_dirs(Some("hw")), vec![PathBuf::from("hw")]);
+        // Empty segments are dropped rather than becoming "", which would be
+        // read as the current directory.
+        assert_eq!(
+            extra_dirs(Some("hw::/etc/nirlock/hw:")),
+            vec![PathBuf::from("hw"), PathBuf::from("/etc/nirlock/hw")]
+        );
+    }
+
+    /// The repo's own profile must win over the embedded copy when pointed at
+    /// explicitly: that is what lets the installer's preflight see a camera
+    /// whose profile ships in hw/ but is not compiled in.
+    #[test]
+    fn a_directory_profile_shadows_the_embedded_one() {
+        let base = std::env::temp_dir().join(format!("nirlock-hw-extra-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(
+            base.join("3277-0055.toml"),
+            BUILTIN_3277_0055.replace("shinetech-3277-0055", "from-the-repo"),
+        )
+        .unwrap();
+        let set = ProfileSet::load_from(&[base.as_path()]);
+        assert_eq!(set.find("3277", "0055").unwrap().id, "from-the-repo");
+        assert!(set.source_of("3277", "0055").unwrap().contains("3277-0055.toml"));
         let _ = std::fs::remove_dir_all(&base);
     }
 

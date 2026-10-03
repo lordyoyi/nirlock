@@ -1,9 +1,17 @@
 [Unit]
 Description=nirlock NIR face-unlock daemon
 Documentation=https://github.com/lordyoyi/nirlock
-# The camera is the only hardware dependency. Without a camera a profile
-# claims (or without ONNX Runtime) the daemon exits 78 and is NOT restarted:
-# see RestartPreventExitStatus. The lock screen then stays password-only.
+# The camera is the only hardware dependency. The daemon exits 78, and is NOT
+# restarted (see RestartPreventExitStatus), only when cameras were enumerated
+# and none of them is one nirlock can use, or when ONNX Runtime is missing.
+# The lock screen then stays password-only.
+#
+# "No camera in sysfs at all" is NOT that case: the daemon re-scans for 10 s
+# first and then exits 1 so this unit retries, because during boot an empty
+# sysfs usually means udev has not finished. The After= below does not help
+# with that — systemd-udev-settle.service is static and nothing pulls it into
+# the boot transaction, so this orders against a unit that never runs. It is
+# kept because it costs nothing where that unit IS pulled in.
 After=systemd-udev-settle.service
 
 [Service]
@@ -16,9 +24,10 @@ Type=simple
 ExecStart=/usr/bin/nirlockd serve --rgb --state /var/lib/nirlock/state.json
 Restart=always
 RestartSec=2
-# 78 = unsupported machine (no profile for any camera, or no ONNX Runtime).
-# Retrying cannot fix either; it only filled the journal with a restart every
-# two seconds on the first machine that was not the author's.
+# 78 = unsupported machine: cameras present and none usable, or no ONNX
+# Runtime. Retrying cannot fix either; it only filled the journal with a
+# restart every two seconds on the first machine that was not the author's.
+# Everything transient keeps exiting 1 and is retried.
 RestartPreventExitStatus=78
 Environment=ORT_DYLIB_PATH=/usr/lib/libonnxruntime.so.1
 

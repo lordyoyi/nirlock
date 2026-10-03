@@ -105,7 +105,8 @@ The two lines that decide it: a `GREY` capture node (the IR sensor) and a
 ## Install
 
 ```
-sudo pacman -S onnxruntime-cpu        # Arch; there is no package called plain "onnxruntime"
+sudo pacman -S onnxruntime-cpu        # Arch; `onnxruntime` is a virtual provide, and the
+                                      # menu it opens includes CUDA builds you do not need
 git clone https://github.com/lordyoyi/nirlock && cd nirlock
 cargo build --release --locked
 target/release/nirlockctl probe       # must say "supported" — stop here if it does not

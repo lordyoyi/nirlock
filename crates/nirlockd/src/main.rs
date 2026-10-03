@@ -128,33 +128,95 @@ fn embedder_kind(name: &str) -> Kind {
     }
 }
 
-/// Exit status for "this machine cannot run nirlock as installed": no
-/// hardware profile claims any camera, or ONNX Runtime is missing. Retrying
-/// fixes neither, so `nirlockd.service` lists it in `RestartPreventExitStatus`
-/// instead of restarting every two seconds forever (EX_CONFIG, sysexits.h).
+/// Exit status for "this machine cannot run nirlock as installed": cameras
+/// were enumerated and not one of them is usable, or ONNX Runtime is missing.
+/// Retrying fixes neither, so `nirlockd.service` lists it in
+/// `RestartPreventExitStatus` instead of restarting every two seconds forever
+/// (EX_CONFIG, sysexits.h).
 const EXIT_UNSUPPORTED: i32 = 78;
 
+/// How long to keep re-scanning sysfs when it shows no camera AT ALL before
+/// concluding anything.
+///
+/// `NoProfile` carries two very different situations in one variant: "four
+/// cameras here and none is a Windows Hello IR camera" (permanent) and "sysfs
+/// has nothing yet" (usually just udev not finished). Treating both as
+/// permanent is how a boot-time race would turn into face unlock being gone
+/// for the whole uptime: the unit's `After=systemd-udev-settle.service` does
+/// not help, because nothing pulls that unit into the boot transaction — it
+/// is `static` and inactive, so the ordering is against something that never
+/// runs. Measured on the reference machine 2026-09-27: uvcvideo registered at
+/// 21:31:31.339 and nirlockd started at 21:31:31.843, a margin of 503 ms. A
+/// slower boot loses that race.
+///
+/// DESIGN §2.3 already polls sysfs for up to 2000 ms for a camera to come
+/// back after resume; this is the same idea at startup, with more room
+/// because cold boot is where the race lives.
+const ENUMERATION_GRACE_MS: u64 = 10_000;
+const ENUMERATION_POLL_MS: u64 = 500;
+
+/// Whether this failure is a property of the machine rather than of the
+/// moment. Only these justify refusing to restart.
 fn is_unsupported(e: &engine::Error) -> bool {
+    match e {
+        // Cameras WERE enumerated and not one of them is usable. No amount of
+        // retrying grows an infrared sensor.
+        engine::Error::Cam(nirlock_cam::Error::NoProfile { devices, .. }) => !devices.is_empty(),
+        engine::Error::Vision(nirlock_vision::Error::OrtLoad(_)) => true,
+        _ => false,
+    }
+}
+
+/// `NoProfile` with nothing in sysfs: no camera was seen at all, which during
+/// boot means "not yet" far more often than "never".
+fn nothing_enumerated(e: &engine::Error) -> bool {
     matches!(
         e,
-        engine::Error::Cam(nirlock_cam::Error::NoProfile { .. })
-            | engine::Error::Vision(nirlock_vision::Error::OrtLoad(_))
+        engine::Error::Cam(nirlock_cam::Error::NoProfile { devices, .. }) if devices.is_empty()
     )
+}
+
+/// Loads the engine, re-scanning while sysfs is still empty.
+///
+/// The camera is chosen before any model is loaded (see `Engine::load`), so a
+/// retry here costs a sysfs walk, not the ~940 ms AuraFace load.
+fn load_engine_waiting_for_udev(s: &Serve) -> Result<engine::Engine, engine::Error> {
+    let mut waited_ms = 0u64;
+    loop {
+        match engine::Engine::load(
+            &s.models,
+            &s.templates,
+            embedder_kind(&s.embedder),
+            s.threads,
+        ) {
+            Ok(e) => return Ok(e),
+            Err(e) if nothing_enumerated(&e) && waited_ms < ENUMERATION_GRACE_MS => {
+                if waited_ms == 0 {
+                    eprintln!(
+                        "nirlockd: no camera in sysfs yet; re-scanning for up to {} ms",
+                        ENUMERATION_GRACE_MS
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(ENUMERATION_POLL_MS));
+                waited_ms += ENUMERATION_POLL_MS;
+            }
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 fn serve(s: &Serve) {
     // Models first: the point of a resident daemon is that a `verify`
     // never pays the ~940 ms AuraFace load (ADR-0004).
-    let eng = match engine::Engine::load(
-        &s.models,
-        &s.templates,
-        embedder_kind(&s.embedder),
-        s.threads,
-    ) {
+    let eng = match load_engine_waiting_for_udev(s) {
         Ok(e) => e,
         Err(e) => {
             eprintln!("nirlockd: {e}");
             let code = if is_unsupported(&e) {
+                eprintln!(
+                    "nirlockd: this machine cannot run face unlock; not restarting. \
+                     The lock screen stays password-only."
+                );
                 EXIT_UNSUPPORTED
             } else {
                 1
@@ -306,5 +368,53 @@ fn bench(b: &Bench) {
             v[v.len() - 1],
             v.len()
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn no_profile(devices: Vec<&str>) -> engine::Error {
+        engine::Error::Cam(nirlock_cam::Error::NoProfile {
+            devices: devices.into_iter().map(String::from).collect(),
+            known: vec!["3277:0055 (shinetech-3277-0055)".into()],
+        })
+    }
+
+    /// The whole point of the 78/1 split. Getting this backwards in either
+    /// direction is a real failure: refusing to restart on a transient
+    /// condition loses face unlock for the rest of the uptime, and restarting
+    /// on a permanent one is the two-second loop that filled the first
+    /// external user's journal.
+    #[test]
+    fn only_a_machine_that_can_never_work_refuses_to_restart() {
+        // Cameras enumerated, none usable: the RGB-only ThinkPad of issue #1.
+        assert!(is_unsupported(&no_profile(vec![
+            "5986:212b 'Integrated Camera'"
+        ])));
+        // Nothing in sysfs at all: almost always udev not finished yet.
+        assert!(!is_unsupported(&no_profile(vec![])));
+        assert!(nothing_enumerated(&no_profile(vec![])));
+        assert!(!nothing_enumerated(&no_profile(vec!["5986:212b 'x'"])));
+    }
+
+    #[test]
+    fn a_camera_that_is_present_but_broken_still_restarts() {
+        // Every other camera error is potentially transient (busy, format,
+        // a node that has not settled) and must keep the old retry.
+        for e in [
+            nirlock_cam::Error::Busy {
+                dev: "/dev/video2".into(),
+            },
+            nirlock_cam::Error::NoMetaNode {
+                usb_sysfs: "/sys/devices/x".into(),
+            },
+        ] {
+            let e = engine::Error::Cam(e);
+            assert!(!is_unsupported(&e), "{e}");
+            assert!(!nothing_enumerated(&e), "{e}");
+        }
+        assert!(!is_unsupported(&engine::Error::NotEnrolled("rodrigo".into())));
     }
 }
