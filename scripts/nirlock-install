@@ -49,6 +49,15 @@ for b in target/release/nirlockd target/release/nirlockctl; do
     preflight_ok=no
   fi
 done
+# Step 3 needs these and exits if they are absent — but by then the binaries
+# and the PAM lane are already installed, which is exactly the half-installed
+# machine this preflight exists to prevent.
+for m in face_detection_yunet_2026may.onnx auraface_glintr100.onnx face_recognition_sface_2021dec.onnx; do
+  if [[ ! -f models/$m ]]; then
+    echo "  missing models/$m — fetch them first:  scripts/nirlock-fetch-models" >&2
+    preflight_ok=no
+  fi
+done
 # The path nirlockd.service hands the daemon in ORT_DYLIB_PATH.
 if [[ ! -e /usr/lib/libonnxruntime.so.1 ]]; then
   echo "  ONNX Runtime is not installed (no /usr/lib/libonnxruntime.so.1)." >&2
@@ -56,10 +65,13 @@ if [[ ! -e /usr/lib/libonnxruntime.so.1 ]]; then
   preflight_ok=no
 fi
 [[ $preflight_ok == yes ]] || exit 1
-# The same verdict the daemon will reach at startup. The checkout's
-# nirlockctl sees the shipped profiles (built in) plus any already in
-# /etc/nirlock/hw, which is exactly the set the installed daemon will have.
-if ! probe_out=$(target/release/nirlockctl probe 2>&1); then
+# The same verdict the daemon will reach at startup, asked with the same set
+# of profiles the installed daemon will have: the repo's hw/ (which step 3
+# copies to /usr/share/nirlock/hw) plus anything already in /etc/nirlock/hw.
+# NIRLOCK_HW_DIRS is what makes hw/ visible here — only one profile is
+# compiled into the binary, so without it this check would refuse the first
+# contributed camera and tell its owner to write a profile already in the tree.
+if ! probe_out=$(NIRLOCK_HW_DIRS=hw target/release/nirlockctl probe 2>&1); then
   echo "$probe_out" | sed 's/^/  /' >&2
   echo >&2
   echo "  Nothing was installed. Face unlock needs a Windows Hello IR camera," >&2
@@ -67,8 +79,8 @@ if ! probe_out=$(target/release/nirlockctl probe 2>&1); then
   exit 1
 fi
 if ! grep -q -- '-> supported:' <<<"$probe_out"; then
-  echo "$probe_out" | sed 's/^/  /'
-  echo
+  echo "$probe_out" | sed 's/^/  /' >&2
+  echo >&2
   echo "  Nothing was installed. Your camera looks usable, but no profile claims" >&2
   echo "  it yet: save the profile printed above to /etc/nirlock/hw/ as shown," >&2
   echo "  then run this installer again." >&2

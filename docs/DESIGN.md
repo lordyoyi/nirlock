@@ -360,8 +360,10 @@ Por qué `default=ignore` + `pam_deny` y no `sufficient`/`required` (pam 1.7.2, 
 #%PAM-1.0
 # nirlock: face lane for the Omarchy lock screen. Read ONLY through
 # PamContext.configDirectory = /usr/lib/nirlock/pam.d (pam_start_confdir); /etc/pam.d is
-# never consulted for this service. nirlock.lock disarms unless this file is byte-identical
-# to the packaged one. No includes: they resolve against this directory. Never add
+# never consulted for this service. The installer copies this file verbatim from the repo;
+# what protects it is root ownership, not any check in the plugin (an earlier comment here
+# claimed the wrapper disarms unless it is byte-identical — that was never implemented).
+# No includes: they resolve against this directory. Never add
 # system-auth: its "auth optional pam_permit.so" turns an ignored result into success.
 auth     [success=done maxtries=die default=ignore]  pam_nirlock.so lane=lock timeout=7000
 auth     required                                    pam_deny.so

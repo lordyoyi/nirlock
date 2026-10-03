@@ -44,6 +44,43 @@ static void write_file(const char *path, const char *text)
 /* Copies the packaged lane to `dst`, replacing every whitespace-delimited
  * `pam_nirlock.so` token with `module` (an absolute path). Any other edit
  * would defeat the purpose: the test must exercise the shipped text. */
+/* A verbatim copy. `other` has no module token to substitute, so
+ * write_lane_from_packaged (which requires exactly one) cannot be used. */
+static void copy_file(const char *src, const char *dst)
+{
+    FILE *in = fopen(src, "r");
+    if (!in) {
+        perror(src);
+        exit(2);
+    }
+    FILE *out = fopen(dst, "w");
+    if (!out) {
+        perror(dst);
+        exit(2);
+    }
+    int c;
+    while ((c = fgetc(in)) != EOF)
+        fputc(c, out);
+    fclose(in);
+    fclose(out);
+}
+
+/* The generated lanes point at a socket that cannot exist, so the "daemon
+ * unreachable" cases are hermetic. Without this the harness connected to
+ * /run/nirlock/sock, the real daemon, and on the author's machine — the only
+ * one with a camera — it performed REAL face verifications: 20 of them in one
+ * `make test`, every one a match, so three tests that expect "unreachable"
+ * got a genuine success and failed. A test suite that authenticates you is
+ * not a test suite. */
+#define NO_DAEMON_SOCKET "socket=/nonexistent/nirlock-test-no-daemon.sock"
+
+/* The one case that must use the packaged lane verbatim cannot be redirected
+ * that way, so it is skipped when a daemon is actually listening. */
+static int daemon_is_live(void)
+{
+    return access("/run/nirlock/sock", F_OK) == 0;
+}
+
 static void write_lane_from_packaged(const char *src, const char *dst, const char *module)
 {
     FILE *in = fopen(src, "r");
@@ -107,6 +144,8 @@ struct tcase {
     const char *user;
     const char *rhost;
     int expect;
+    /* 1 = only meaningful with no daemon listening (see daemon_is_live). */
+    int needs_no_daemon;
 };
 
 int main(int argc, char **argv)
@@ -127,47 +166,50 @@ int main(int argc, char **argv)
     /* The module alone, `required`: pam_authenticate returns its raw code. */
     snprintf(lane, sizeof lane,
              "#%%PAM-1.0\n"
-             "auth     required    %s lane=lock timeout=7000\n",
+             "auth     required    %s lane=lock timeout=7000 " NO_DAEMON_SOCKET "\n",
              argv[1]);
     snprintf(path, sizeof path, "%s/nirlock-direct", confdir);
     write_file(path, lane);
     snprintf(lane, sizeof lane,
              "#%%PAM-1.0\n"
-             "auth     required    %s lane=lock bogus=1\n",
+             "auth     required    %s lane=lock bogus=1 " NO_DAEMON_SOCKET "\n",
              argv[1]);
     snprintf(path, sizeof path, "%s/nirlock-direct-badopt", confdir);
     write_file(path, lane);
     snprintf(lane, sizeof lane,
              "#%%PAM-1.0\n"
-             "auth     required    %s lane=sudo\n",
+             "auth     required    %s lane=sudo " NO_DAEMON_SOCKET "\n",
              argv[1]);
     snprintf(path, sizeof path, "%s/nirlock-direct-badlane", confdir);
     write_file(path, lane);
+    /* The packaged `other`, not a copy: a second source of truth here is how
+     * the installed one drifted to two types while the repo had four. */
     snprintf(path, sizeof path, "%s/other", confdir);
-    write_file(path,
-               "#%PAM-1.0\n"
-               "auth     required   pam_deny.so\n"
-               "account  required   pam_deny.so\n"
-               "password required   pam_deny.so\n"
-               "session  required   pam_deny.so\n");
+    {
+        char src[512];
+        const char *slash = strrchr(argv[2], '/');
+        int dirlen = slash ? (int)(slash - argv[2]) : 1;
+        snprintf(src, sizeof src, "%.*s/other", dirlen, slash ? argv[2] : ".");
+        copy_file(src, path);
+    }
     /* Fail-open canaries and option errors. */
     snprintf(lane, sizeof lane,
              "#%%PAM-1.0\n"
-             "auth     [success=done maxtries=die default=ignore]  %s lane=lock bogus=1\n"
+             "auth     [success=done maxtries=die default=ignore]  %s lane=lock bogus=1 " NO_DAEMON_SOCKET "\n"
              "auth     required                                    pam_deny.so\n",
              argv[1]);
     snprintf(path, sizeof path, "%s/nirlock-badopt", confdir);
     write_file(path, lane);
     snprintf(lane, sizeof lane,
              "#%%PAM-1.0\n"
-             "auth     [success=done maxtries=die default=ignore]  %s lane=lock\n"
+             "auth     [success=done maxtries=die default=ignore]  %s lane=lock " NO_DAEMON_SOCKET "\n"
              "auth     optional                                    pam_permit.so\n",
              argv[1]);
     snprintf(path, sizeof path, "%s/canary-permit", confdir);
     write_file(path, lane);
     snprintf(lane, sizeof lane,
              "#%%PAM-1.0\n"
-             "auth     sufficient  %s lane=lock\n"
+             "auth     sufficient  %s lane=lock " NO_DAEMON_SOCKET "\n"
              "auth     required    pam_deny.so\n",
              argv[1]);
     snprintf(path, sizeof path, "%s/canary-sufficient", confdir);
@@ -175,28 +217,35 @@ int main(int argc, char **argv)
 
     const struct tcase cases[] = {
         /* Raw codes of §4.3, measured with the module alone as `required`. */
-        {"direct: daemon unreachable → AUTHINFO_UNAVAIL (9)", "nirlock-direct", "rodrigo", NULL, PAM_AUTHINFO_UNAVAIL},
-        {"direct: invalid PAM_USER → USER_UNKNOWN (10)", "nirlock-direct", "Bad User", NULL, PAM_USER_UNKNOWN},
-        {"direct: PAM_USER unset → USER_UNKNOWN (10)", "nirlock-direct", NULL, NULL, PAM_USER_UNKNOWN},
-        {"direct: PAM_RHOST set → AUTH_ERR (7)", "nirlock-direct", "rodrigo", "evil.example", PAM_AUTH_ERR},
-        {"direct: unknown option → SERVICE_ERR (3)", "nirlock-direct-badopt", "rodrigo", NULL, PAM_SERVICE_ERR},
-        {"direct: lane=sudo → SERVICE_ERR (3)", "nirlock-direct-badlane", "rodrigo", NULL, PAM_SERVICE_ERR},
+        {"direct: daemon unreachable → AUTHINFO_UNAVAIL (9)", "nirlock-direct", "rodrigo", NULL, PAM_AUTHINFO_UNAVAIL, 0},
+        {"direct: invalid PAM_USER → USER_UNKNOWN (10)", "nirlock-direct", "Bad User", NULL, PAM_USER_UNKNOWN, 0},
+        {"direct: PAM_USER unset → USER_UNKNOWN (10)", "nirlock-direct", NULL, NULL, PAM_USER_UNKNOWN, 0},
+        {"direct: PAM_RHOST set → AUTH_ERR (7)", "nirlock-direct", "rodrigo", "evil.example", PAM_AUTH_ERR, 0},
+        {"direct: unknown option → SERVICE_ERR (3)", "nirlock-direct-badopt", "rodrigo", NULL, PAM_SERVICE_ERR, 0},
+        {"direct: lane=sudo → SERVICE_ERR (3)", "nirlock-direct-badlane", "rodrigo", NULL, PAM_SERVICE_ERR, 0},
         /* Through the packaged lane: the module returns PAM_AUTHINFO_UNAVAIL
          * (9); default=ignore drops it and pam_deny (required) decides:
          * 7 = PAM_AUTH_ERR. */
-        {"lane: unavailable → ignore → pam_deny", "nirlock-lock", "rodrigo", NULL, PAM_AUTH_ERR},
-        {"lane: invalid user → USER_UNKNOWN → ignore → deny", "nirlock-lock", "Bad User", NULL, PAM_AUTH_ERR},
-        {"lane: PAM_RHOST set → AUTH_ERR → ignore → deny", "nirlock-lock", "rodrigo", "evil.example", PAM_AUTH_ERR},
-        {"lane: unknown option → SERVICE_ERR → ignore → deny", "nirlock-badopt", "rodrigo", NULL, PAM_AUTH_ERR},
-        {"missing service → other → deny", "no-such-service", "rodrigo", NULL, PAM_AUTH_ERR},
+        /* Uses the packaged lane verbatim, so it cannot be pointed at a dead
+         * socket; skipped when a daemon is listening (see daemon_is_live). */
+        {"lane: unavailable → ignore → pam_deny", "nirlock-lock", "rodrigo", NULL, PAM_AUTH_ERR, 1},
+        {"lane: invalid user → USER_UNKNOWN → ignore → deny", "nirlock-lock", "Bad User", NULL, PAM_AUTH_ERR, 0},
+        {"lane: PAM_RHOST set → AUTH_ERR → ignore → deny", "nirlock-lock", "rodrigo", "evil.example", PAM_AUTH_ERR, 0},
+        {"lane: unknown option → SERVICE_ERR → ignore → deny", "nirlock-badopt", "rodrigo", NULL, PAM_AUTH_ERR, 0},
+        {"missing service → other → deny", "no-such-service", "rodrigo", NULL, PAM_AUTH_ERR, 0},
         /* Canary: an ignored result followed by `optional pam_permit` is a
          * success (0). This is why the lane must never include system-auth. */
-        {"canary: ignore + optional pam_permit fails OPEN", "canary-permit", "rodrigo", NULL, PAM_SUCCESS},
+        {"canary: ignore + optional pam_permit fails OPEN", "canary-permit", "rodrigo", NULL, PAM_SUCCESS, 0},
         /* Canary: `sufficient` flattens the module's code to pam_deny's. */
-        {"canary: sufficient + pam_deny → 7", "canary-sufficient", "rodrigo", NULL, PAM_AUTH_ERR},
+        {"canary: sufficient + pam_deny → 7", "canary-sufficient", "rodrigo", NULL, PAM_AUTH_ERR, 0},
     };
     int bad = 0;
+    int live = daemon_is_live();
     for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
+        if (cases[i].needs_no_daemon && live) {
+            printf("skip %-52s    (nirlockd is listening on /run/nirlock/sock)\n", cases[i].name);
+            continue;
+        }
         int rc = run(confdir, cases[i].service, cases[i].user, cases[i].rhost);
         int ok = rc == cases[i].expect;
         printf("%s %-52s => %2d (%s)%s\n", ok ? "ok  " : "FAIL", cases[i].name, rc,
